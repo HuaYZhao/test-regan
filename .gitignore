@@ -1,0 +1,6 @@
+*.log
+data/
+summary/
+_processed_data/
+checkpoint/
+__pycache__/
