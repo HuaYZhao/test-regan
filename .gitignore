@@ -1,5 +1,5 @@
 *.log
-data/
+data/*
 summary/
 _processed_data/
 checkpoint/
