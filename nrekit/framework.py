@@ -324,7 +324,7 @@ class gan_framework:
             if g is not None:
                 tf.summary.histogram(v.name + "/gradient", g)
 
-    def feed_data(self, models, batch_data_gen):
+    def feed_data(self, models, batch_data_gen, return_label=True):
         feed_dict = {}
         batch_data = batch_data_gen.next_batch(batch_data_gen.batch_size)
         for model in models:
@@ -339,6 +339,9 @@ class gan_framework:
             })
             if 'mask' in batch_data and hasattr(model, "mask"):
                 feed_dict.update({model.mask: batch_data['mask']})
+
+        if return_label:
+            return feed_dict, batch_data['rel']
         return feed_dict
 
     def one_step(self, sess, model, batch_data, run_array):
@@ -454,45 +457,64 @@ class gan_framework:
         else:
             saver.restore(self.sess, pretrain_model)
 
+        # Training Metric
+        best_metric = 0
+        best_prec = None
+        best_recall = None
         # Training
         global_step = tf.Variable(0, trainable=False)
-        temp = tf.train.exponential_decay(1.0, global_step, 200, 0.8, staircase=True)
+        temp = tf.train.exponential_decay(1.0, global_step, 100, 0.8, staircase=True)
         temp = tf.clip_by_value(temp, 0.001, 1.0)
         global_steps = 0
         for epoch in range(max_epoch):
             logging.info('###### Epoch ' + str(epoch) + ' ######')
+            tot_correct = 0
+            tot_not_na_correct = 0
+            tot = 0
+            tot_not_na = 0
             i = 0
             time_sum = 0
             while True:
                 time_start = time.time()
                 try:
-                    feed_data = self.feed_data([G, D], self.train_data_loader)
+                    feed_data, batch_label = self.feed_data([G, D], self.train_data_loader)
                     critic_num = 10
                     if i < 25 or i % 500 == 0:
                         critic_num = 25
                     temperature = self.sess.run(temp, feed_dict={global_step: global_steps})
                     feed_data.update({G.temperature: temperature})
                     for di in range(critic_num):
-                        _, d_loss = self.sess.run([D_update, D_loss], feed_dict=feed_data)
-                        logging.info("d_loss: %f" % d_loss)
-                        self.sess.run(clip_d_op)
+                        _, d_loss, _ = self.sess.run([D_update, D_loss, clip_d_op], feed_dict=feed_data)
 
-                    _, g_loss, d_loss, _, d_real, d_fake = self.sess.run(
-                        [G_update] + loss_ops + [summary_op] + [D_real, D_fake],
+                    _, g_loss, d_loss, summary, d_real, d_fake, iter_logit = self.sess.run(
+                        [G_update] + loss_ops + [summary_op] + [D_real, D_fake] + [D.train_out()],
                         feed_dict=feed_data)
+                    summary_writer.add_summary(summary, global_steps)
                     logging.info("g_loss: %f, d_loss: %f" % (g_loss, d_loss))
-                    print("d_real", d_real)
                 except StopIteration:
                     break
                 time_end = time.time()
                 t = time_end - time_start
                 time_sum += t
-                logging.info("epoch %d step %d time %.2f | loss: \r" % (epoch, i, t))
+                iter_label = np.array(batch_label)
+                if len(iter_logit.shape) == 3:
+                    iter_logit = np.mean(iter_logit, 0)
+                iter_output = iter_logit.argmax(-1)
+                iter_correct = (iter_output == iter_label).sum()
+                iter_not_na_correct = np.logical_and(iter_output == iter_label, iter_label != 0).sum()
+                tot_correct += iter_correct
+                tot_not_na_correct += iter_not_na_correct
+                tot += iter_label.shape[0]
+                tot_not_na += (iter_label != 0).sum()
+                logging.info("epoch %d step %d time %.2f | not NA accuracy: %f, accuracy: %f\r" % (
+                    epoch, i, t, float(tot_not_na_correct) / tot_not_na, float(tot_correct) / tot))
                 global_steps += 1
                 i += 1
             logging.info("\nAverage iteration time: %f" % (time_sum / i))
 
             if (epoch + 1) % test_epoch == 0:
+                metric = self.test(gen_model)
+                logging.info(metric)
                 logging.info("storing...")
                 if not os.path.isdir(ckpt_dir):
                     os.mkdir(ckpt_dir)

@@ -213,10 +213,14 @@ class Generator(nrekit.framework.re_model):
         gumbel_dist = tf.contrib.distributions.RelaxedOneHotCategorical(0.001,
                                                                         logits=self._train_logit)
         _test_out = gumbel_dist.sample(1)
+        _test_out = tf.squeeze(_test_out)
         return _test_out
 
     def decay_temp(self, temp):
         self.temperature = temp
 
 
-framework.train(Generator, Discriminator, "gan_model", max_epoch=60, ckpt_dir="checkpoint")
+model_file = tf.train.latest_checkpoint('./checkpoint')
+framework.train(Generator, Discriminator, "gan_model", max_epoch=60, ckpt_dir="checkpoint", pretrain_model=model_file)
+
+# framework.test(Generator, model_file)
