@@ -108,15 +108,18 @@ class Discriminator(nrekit.framework.re_model):
 
             x_train = tf.concat([self._train_logit, rel_embedding], -1)
             x_test = tf.concat([self._test_logit, rel_embedding], -1)
+            x_train = nrekit.network.encoder.__linear__(x_train, self.rel_tot, bias=True)
+            x_test = nrekit.network.encoder.__linear__(x_test, self.rel_tot, bias=True)
+            x_train = tf.nn.relu(x_train)
+            x_test = tf.nn.relu(x_test)
             self._train_disc = nrekit.network.encoder.__linear__(x_train, 1, bias=False)
             self._test_disc = nrekit.network.encoder.__linear__(x_test, 1, bias=False)
             return self._train_disc, self._test_disc
 
-    def loss(self):
-        return self._loss
-
-    def set_loss(self, loss):
-        self._loss = loss
+    def pretrain_loss(self):
+        _loss = nrekit.network.classifier.softmax_cross_entropy(self._train_logit, self.label, self.rel_tot,
+                                                                weights_table=self.get_weights())
+        return _loss
 
     def train_out(self):
         return self._train_disc
@@ -215,9 +218,6 @@ class Generator(nrekit.framework.re_model):
         _test_out = gumbel_dist.sample(1)
         _test_out = tf.squeeze(_test_out)
         return _test_out
-
-    def decay_temp(self, temp):
-        self.temperature = temp
 
 
 model_file = tf.train.latest_checkpoint('./checkpoint')

@@ -359,7 +359,26 @@ class gan_framework:
         result = sess.run(run_array, feed_dict)
         return result
 
-    def pretrain(self):
+    def pretrain_D(self, disc_model,
+                   ckpt_dir='./pretrain_D/checkpoint',
+                   summary_dir='./pretrain_D/checkpoint',
+                   max_epoch=10,
+                   restore_model=None):
+
+        # Init
+        config = tf.ConfigProto(allow_soft_placement=True)
+        config.gpu_options.per_process_gpu_memory_fraction = 0.9
+        config.gpu_options.allow_growth = True
+
+        D = disc_model(self.train_data_loader, self.train_data_loader.batch_size,
+                       self.train_data_loader.max_length)
+        #########################
+        # Instantiate optimizers
+        #########################
+        D_opt = tf.train.AdamOptimizer(learning_rate=1E-3,name="pretrain_D_optim",beta1=0.5,beta2=0.9)
+
+        D_real = D(D.label)
+
         pass
 
     def train(self,
@@ -379,7 +398,7 @@ class gan_framework:
 
         # Init
         config = tf.ConfigProto(allow_soft_placement=True)
-        config.gpu_options.per_process_gpu_memory_fraction = 0.7
+        config.gpu_options.per_process_gpu_memory_fraction = 0.9
         config.gpu_options.allow_growth = True
 
         self.sess = tf.Session(config=config)
