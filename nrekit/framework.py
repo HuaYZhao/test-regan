@@ -359,27 +359,109 @@ class gan_framework:
         result = sess.run(run_array, feed_dict)
         return result
 
+    def generate_neg_label(self, pos_label):
+        rel_tot = self.train_data_loader.rel_tot
+        batch_size = pos_label.shape[0]
+        neg_label = []
+        for i in range(batch_size):
+            probs = np.ones(rel_tot) / (rel_tot - 1)
+            probs[pos_label[i]] = 0
+            neg_label.append(np.random.choice(range(rel_tot), 1, p=probs)[0])
+        return neg_label
+
     def pretrain_D(self, disc_model,
                    ckpt_dir='./pretrain_D/checkpoint',
-                   summary_dir='./pretrain_D/checkpoint',
+                   summary_dir='./pretrain_D/summary',
                    max_epoch=10,
-                   restore_model=None):
+                   restore_model=None,
+                   model_name="pretrain_D"):
 
         # Init
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.per_process_gpu_memory_fraction = 0.9
         config.gpu_options.allow_growth = True
 
+        self.sess = tf.Session(config=config)
+
         D = disc_model(self.train_data_loader, self.train_data_loader.batch_size,
                        self.train_data_loader.max_length)
+
+        #########################
+        # Instantiate input placeholder
+        #########################
+        real_input = tf.placeholder(dtype=tf.int32, shape=[None], name="real_input")
+        fake_input = tf.placeholder(dtype=tf.int32, shape=[None], name="fake_input")
+        y_ = tf.placeholder(dtype=tf.int32, shape=[None], name="true_label")
         #########################
         # Instantiate optimizers
         #########################
-        D_opt = tf.train.AdamOptimizer(learning_rate=1E-3,name="pretrain_D_optim",beta1=0.5,beta2=0.9)
+        D_opt = tf.train.AdamOptimizer(learning_rate=1E-3, name="pretrain_D_optim", beta1=0.5, beta2=0.9)
+        # D_opt = tf.train.GradientDescentOptimizer(learning_rate=1E-3)
 
-        D_real = D(D.label)
+        D_real, _ = D(real_input, pretrain=True)
+        D_fake, _ = D(fake_input, pretrain=True)
 
-        pass
+        y = tf.concat([D_real, D_fake], 0)
+
+        loss = -tf.reduce_mean(
+            tf.cast(y_, dtype=tf.float32) * tf.log(y) + tf.cast((1 - y_), dtype=tf.float32) * tf.log(1 - y))
+        global_step = tf.Variable(0, trainable=False)
+        train_op = D_opt.minimize(loss, global_step=global_step)
+
+        tf.summary.scalar("pretrain_loss", loss)
+        summary_op = tf.summary.merge_all()
+        summary_writer = tf.summary.FileWriter(summary_dir, self.sess.graph)
+
+        # Saver
+        saver = tf.train.Saver(max_to_keep=None)
+        if restore_model is None:
+            self.sess.run(tf.global_variables_initializer())
+        else:
+            saver.restore(self.sess, restore_model)
+
+        for epoch in range(max_epoch):
+            logging.info("###### Pretrain epoch" + str(epoch) + "#######")
+            pos_correct = 0
+            pos_tot = 0
+            neg_correct = 0
+            neg_tot = 0
+            i = 0
+            time_sum = 0
+            while True:
+                time_start = time.time()
+                try:
+                    feed_data, batch_label = self.feed_data([D], self.train_data_loader)
+                    neg_label = self.generate_neg_label(batch_label)
+                    true_label = np.array([1] * D_real.shape[0] + [0] * D_fake.shape[0])
+                    feed_data.update({real_input: batch_label, fake_input: neg_label, y_: true_label})
+                    pred_pos, pred_neg, _loss, _, summary, step = self.sess.run(
+                        [D_real, D_fake, loss, train_op, summary_op, global_step],
+                        feed_dict=feed_data)
+                    summary_writer.add_summary(summary, step)
+                    logging.info("pretrain_D_loss: %f" % _loss)
+                except StopIteration:
+                    break
+                time_end = time.time()
+                t = time_end - time_start
+                time_sum += t
+                pos_correct += (pred_pos >= 0.5).sum()
+                neg_correct += (pred_neg < 0.5).sum()
+                pos_tot += len(pred_pos)
+                neg_tot += len(pred_neg)
+                logging.info(
+                    "epoch %d step %d time %.2f | loss: %f, pos accuracy: %f, neg accuracy: %f, tot accuracy: %f \r" % (
+                        epoch, i, t, _loss, float(pos_correct) / pos_tot, float(neg_correct) / neg_tot,
+                        float(pos_correct + neg_correct) / (pos_tot + neg_tot)
+                    ))
+                i += 1
+
+            logging.info("\nAverage iteration time: %f" % (time_sum / i))
+
+            logging.info("storing...")
+            if not os.path.isdir(ckpt_dir):
+                os.mkdir(ckpt_dir)
+            path = saver.save(self.sess, os.path.join(ckpt_dir, model_name))
+            logging.info("Finish storing")
 
     def train(self,
               gen_model,
@@ -426,7 +508,7 @@ class gan_framework:
 
         REL_fake = G.train_out()
         D_real, _ = D(D.label)
-        D_fake, _ = D(REL_fake, reuse=True)
+        D_fake, _ = D(REL_fake)
 
         ##########################
         # Instantiate losses

@@ -2,6 +2,15 @@ import tensorflow as tf
 import numpy as np
 
 
+def relation_embedding(bag_rel, rel_tot, embedding_dim=5, var_scope=None):
+    with tf.variable_scope(var_scope or 'relation_embedding', reuse=tf.AUTO_REUSE):
+        relation_matrix = tf.get_variable('relation_matrix', shape=[rel_tot, embedding_dim], dtype=tf.float32,
+                                          initializer=tf.contrib.layers.xavier_initializer())
+        bag_rel = tf.cast(bag_rel, dtype=tf.float32)
+        x = tf.matmul(bag_rel, relation_matrix)
+    return x
+
+
 def init_relation_embedding(train_data_loader, var_scope=None, relation_embedding_dim=50, level=1):
     rel2id = train_data_loader.rel2id
     word2id = train_data_loader.word2id

@@ -37,7 +37,7 @@ class Discriminator(nrekit.framework.re_model):
                                                name=model_name)
             self.mask = tf.placeholder(dtype=tf.int32, shape=[None, self.max_length], name="mask")
 
-    def __call__(self, rel, reuse=False):
+    def __call__(self, rel, pretrain=False):
         """
 
         :param rel: Integer for class or [Integer]
@@ -52,12 +52,13 @@ class Discriminator(nrekit.framework.re_model):
             rel = tf.reduce_mean(rel, 0)
         else:
             raise NotImplementedError
-        with tf.variable_scope(self.name, reuse=reuse):
-            self.relation_embedding = nrekit.network.embedding.init_relation_embedding(self.train_data_loader)
+        with tf.variable_scope(self.name, reuse=tf.AUTO_REUSE):
+            # bag level, Not implemented: consider the instance level
+            # rel_embedding = nrekit.network.embedding.relation_embedding(rel, self.rel_tot)
+            relation_embedding = nrekit.network.embedding.init_relation_embedding(self.train_data_loader)
             # Embedding
             x = nrekit.network.embedding.word_position_embedding(self.word, self.word_vec_mat, self.pos1, self.pos2)
-            # bag level, Not implemented: consider the instance level
-            rel_embedding = nrekit.network.embedding.rel_embedding(rel, self.relation_embedding)
+            rel_embedding = nrekit.network.embedding.rel_embedding(rel, relation_embedding)
 
             # Encoder
             if Discriminator.encoder == "pcnn":
@@ -108,18 +109,16 @@ class Discriminator(nrekit.framework.re_model):
 
             x_train = tf.concat([self._train_logit, rel_embedding], -1)
             x_test = tf.concat([self._test_logit, rel_embedding], -1)
-            x_train = nrekit.network.encoder.__linear__(x_train, self.rel_tot, bias=True)
-            x_test = nrekit.network.encoder.__linear__(x_test, self.rel_tot, bias=True)
+            x_train = nrekit.network.encoder.__linear__(x_train, self.rel_tot, bias=True, name="red_dim")
+            x_test = nrekit.network.encoder.__linear__(x_test, self.rel_tot, bias=True, name="red_dim")
             x_train = tf.nn.relu(x_train)
             x_test = tf.nn.relu(x_test)
-            self._train_disc = nrekit.network.encoder.__linear__(x_train, 1, bias=False)
-            self._test_disc = nrekit.network.encoder.__linear__(x_test, 1, bias=False)
+            self._train_disc = nrekit.network.encoder.__linear__(x_train, 1, bias=False, name="binary_class")
+            self._test_disc = nrekit.network.encoder.__linear__(x_test, 1, bias=False, name="binary_class")
+            if pretrain:
+                self._train_disc = tf.nn.sigmoid(self._train_disc)
+                self._test_disc = tf.nn.sigmoid(self._test_disc)
             return self._train_disc, self._test_disc
-
-    def pretrain_loss(self):
-        _loss = nrekit.network.classifier.softmax_cross_entropy(self._train_logit, self.label, self.rel_tot,
-                                                                weights_table=self.get_weights())
-        return _loss
 
     def train_out(self):
         return self._train_disc
@@ -220,7 +219,8 @@ class Generator(nrekit.framework.re_model):
         return _test_out
 
 
-model_file = tf.train.latest_checkpoint('./checkpoint')
-framework.train(Generator, Discriminator, "gan_model", max_epoch=60, ckpt_dir="checkpoint", pretrain_model=model_file)
+# model_file = tf.train.latest_checkpoint('./checkpoint')
+framework.pretrain_D(Discriminator)
+# framework.train(Generator, Discriminator, "gan_model", max_epoch=60, ckpt_dir="checkpoint", pretrain_model=model_file)
 
 # framework.test(Generator, model_file)
